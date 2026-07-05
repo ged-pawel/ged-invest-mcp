@@ -135,13 +135,13 @@ def register(mcp: FastMCP) -> None:
         hardware), a per-segment panel layout, and an area reconciliation.
         """
         if segments and polygon:
-            raise ValueError("Provide either 'segments' or 'polygon', not both.")
+            raise ValueError("Podaj albo 'segments', albo 'polygon' — nie oba naraz.")
 
         widths = tuple(available_panel_widths) if available_panel_widths else None
 
         if polygon:
             if height is None:
-                raise ValueError("'height' [cm] is required when 'polygon' is given.")
+                raise ValueError("Przy 'polygon' wymagana jest 'height' [cm].")
             points = [(float(p[0]), float(p[1])) for p in polygon]
             if wall_thickness is not None:
                 walls, winding = calculator.polygon_to_cell(
@@ -185,7 +185,7 @@ def register(mcp: FastMCP) -> None:
             if available_stock:
                 res["stock_check"] = calculator.reconcile_stock(res, available_stock)
             return res
-        raise ValueError("You must provide 'segments' or 'polygon'.")
+        raise ValueError("Podaj 'segments' lub 'polygon'.")
 
     @mcp.tool()
     def draw_formwork_layout(

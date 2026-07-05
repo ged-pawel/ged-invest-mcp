@@ -177,14 +177,14 @@ def test_reconciliation_separates_overshoot_and_timber():
 def test_pressure_warning():
     segments = [WallSegment(length=300, height=150, corner_at_end="outer")]
     result = calculator.calculate(segments, system="BAUTEKK", pressure_kn_m2=60)
-    assert any("pressure" in w.lower() for w in result["warnings"])
+    assert any("ciśnien" in w.lower() for w in result["warnings"])
 
 
 def test_unverified_catalog_warns():
     segments = [WallSegment(length=300, height=270, corner_at_end="outer")]
     result = calculator.calculate(segments, system="BAUFRAME")
     assert result["catalog_verified"] is False
-    assert any("verif" in w.lower() for w in result["warnings"])
+    assert any("weryf" in w.lower() for w in result["warnings"])
 
 
 # --- concrete pressure (DIN 18218) ---------------------------------------
@@ -203,7 +203,7 @@ def test_pressure_hydrostatic_cap():
     r = pressure.concrete_pressure(2.0, 0.5, "F3")
     assert r["hydrostatic_pressure_kn_m2"] == 12.5
     assert r["design_pressure_kn_m2"] == 12.5
-    assert r["governing"] == "hydrostatic"
+    assert r["governing"] == "hydrostatyczne"
 
 
 def test_pressure_limit_and_max_rate():
@@ -211,7 +211,7 @@ def test_pressure_limit_and_max_rate():
     assert r["within_limit"] is False
     # (40 - 18) / 14 = 1.57
     assert r["max_pouring_rate_for_limit_m_per_h"] == 1.57
-    assert any("exceed" in w.lower() for w in r["warnings"])
+    assert any("przekracza" in w.lower() for w in r["warnings"])
 
 
 def test_pressure_flowable_min_and_k1():
@@ -336,7 +336,7 @@ def test_cell_corner_bom_counts():
     assert res["summary"]["corner_filler_panels"] == 8   # 2 per corner
     inner = [c for c in res["bom"]["corners"] if c["kind"] == "inner"][0]
     assert "20x20" in inner["description"]
-    assert inner["note"] and "to order" in inner["note"]  # non-catalog leg
+    assert inner["note"] and "zamówienia" in inner["note"]
     # fillers are tracked as a separate BOM line, not mixed into wall panels
     fillers = res["bom"]["corner_fillers"]
     assert sum(f["quantity"] for f in fillers) == 8
@@ -351,7 +351,7 @@ def test_cell_default_filler_is_dedicated_element():
     fillers = res["bom"]["corner_fillers"]
     assert all(f["is_standard_panel"] is False for f in fillers)
     assert all(f["width_cm"] == 40 for f in fillers)
-    assert any("dedicated" in w.lower() for w in res["warnings"])
+    assert any("osobny" in w.lower() or "dedykowany" in w.lower() for w in res["warnings"])
 
 
 # --- deterministic SVG rendering (moved into the MCP) --------------------
@@ -362,7 +362,11 @@ def test_render_layout_svg_is_wellformed():
     assert svg.startswith("<svg") and svg.rstrip().endswith("</svg>")
     assert 'xmlns="http://www.w3.org/2000/svg"' in svg
     assert "PLAN" in svg          # rectangle -> plan present
-    assert "aligned joints" in svg
+    assert "fugi zgrane" in svg
+    assert 'fill="#a9d18e"' in svg  # panel colours on plan + elevations
+    # plan width labels outside the thin wall bands
+    plan_part = svg.split("Ściana")[0]
+    assert plan_part.count('font-size="7"') >= 4
 
 
 def test_render_layout_svg_reflects_widths_and_corners():

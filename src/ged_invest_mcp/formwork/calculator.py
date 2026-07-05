@@ -35,27 +35,13 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 
 from .catalog import CATALOG_VERSION, FormworkSystem, get_system
-
-UNITS = {
-    "length": "cm",
-    "area": "m2",
-    "timber": "lm (linear meters)",
-    "pressure": "kN/m2",
-    "counts": "pieces",
-}
+from .messages_pl import DISCLAIMER, UNITS
 
 # Sanity bounds on a single wall dimension [cm]: below MIN it is measurement
 # noise, above MAX it is almost certainly a unit slip (e.g. mm entered as cm)
 # and would also blow up the DP arrays. Both are rejected with a clear error.
 MIN_DIMENSION_CM = 1.0
 MAX_DIMENSION_CM = 10_000.0  # 100 m
-
-DISCLAIMER = (
-    "Engineering estimate only. Quantities support quoting/ordering and MUST be "
-    "approved by the site manager. Timber infill, anchoring and ground bearing "
-    "are on the client's side (per project notes)."
-)
-
 
 # ---------------------------------------------------------------------------
 # Input
@@ -163,6 +149,13 @@ class SegmentResult:
     vertical_layout: list[str] = field(default_factory=list)
 
 
+_DIM_PL = {
+    "length": "długość",
+    "height": "wysokość",
+    "flat run (axis minus corners)": "bieg płyt (oś minus narożniki)",
+}
+
+
 def _validate_dimension(value: float, name: str, label: str) -> None:
     """Reject non-finite, non-positive, too-small or too-large dimensions.
 
@@ -170,16 +163,17 @@ def _validate_dimension(value: float, name: str, label: str) -> None:
     would let them through and crash later in int(round(...)); check finiteness
     explicitly here.
     """
+    dim = _DIM_PL.get(name, name)
     if not math.isfinite(value):
-        raise ValueError(f"Segment '{label}' has a non-finite {name} ({value}).")
+        raise ValueError(f"Odcinek „{label}”: nieprawidłowa {dim} ({value}).")
     if value < MIN_DIMENSION_CM:
         raise ValueError(
-            f"Segment '{label}' {name} {value} cm is below the {MIN_DIMENSION_CM} cm minimum."
+            f"Odcinek „{label}”: {dim} {value} cm jest poniżej minimum {MIN_DIMENSION_CM} cm."
         )
     if value > MAX_DIMENSION_CM:
         raise ValueError(
-            f"Segment '{label}' {name} {value} cm exceeds the {MAX_DIMENSION_CM} cm maximum "
-            f"(likely a unit error - dimensions are in cm)."
+            f"Odcinek „{label}”: {dim} {value} cm przekracza maksimum {MAX_DIMENSION_CM} cm "
+            f"(prawdopodobnie błąd jednostki — wymiary podawaj w cm)."
         )
 
 
@@ -199,12 +193,12 @@ def _resolve_widths(
     unknown = sorted({int(w) for w in available_widths} - known)
     if unknown:
         warnings.append(
-            f"Ignored widths not in the {system.name} catalog: {unknown} cm."
+            f"Pominięto szerokości spoza katalogu {system.name}: {unknown} cm."
         )
     if not kept:
         raise ValueError(
-            f"None of the requested widths {sorted(set(available_widths))} exist in "
-            f"the {system.name} catalog {list(system.panel_widths)}."
+            f"Żadna z podanych szerokości {sorted(set(available_widths))} nie występuje "
+            f"w katalogu {system.name} {list(system.panel_widths)}."
         )
     return kept, warnings
 
@@ -233,12 +227,12 @@ def _calculate_segment(
     area = faces * (seg.length / 100.0) * (seg.height / 100.0)
 
     # ordered, human-readable layouts (per single face)
-    h_layout = [f"{w}cm" for w in sorted(columns, reverse=True) for _ in range(columns[w])]
+    h_layout = [f"{w} cm" for w in sorted(columns, reverse=True) for _ in range(columns[w])]
     if timber_h > 0:
-        h_layout.append(f"timber {timber_h}cm")
-    v_layout = [f"{h}cm" for h in sorted(courses, reverse=True) for _ in range(courses[h])]
+        h_layout.append(f"deska {timber_h} cm")
+    v_layout = [f"{h} cm" for h in sorted(courses, reverse=True) for _ in range(courses[h])]
     if overshoot_v > 0:
-        v_layout.append(f"(top overshoot {overshoot_v}cm)")
+        v_layout.append(f"(nadwyżka górna {overshoot_v} cm)")
 
     return SegmentResult(
         label=seg.label or "?",
@@ -273,15 +267,15 @@ def polygon_to_segments(
     """
     for p in points:
         if not (math.isfinite(p[0]) and math.isfinite(p[1])):
-            raise ValueError(f"Polygon has a non-finite coordinate: {p}.")
+            raise ValueError(f"Wielokąt ma nieprawidłową współrzędną: {p}.")
 
     points = _dedup_points(points, closed)
     n = len(points)
     min_points = 3 if closed else 2
     if n < min_points:
         raise ValueError(
-            f"A {'closed polygon' if closed else 'polyline'} requires at least "
-            f"{min_points} distinct points (got {n} after removing duplicates)."
+            f"{'Zamknięty wielokąt' if closed else 'Polilinia'} wymaga co najmniej "
+            f"{min_points} różnych punktów (po usunięciu duplikatów: {n})."
         )
 
     signed_area2 = 0.0
@@ -291,8 +285,8 @@ def polygon_to_segments(
         signed_area2 += x1 * y2 - x2 * y1
     if closed and abs(signed_area2) < 1e-6:
         raise ValueError(
-            "Polygon is degenerate (near-zero area / collinear points); cannot "
-            "determine inside vs outside for corner detection."
+            "Wielokąt jest zdegenerowany (zerowy obszar / punkty współliniowe); "
+            "nie można określić wnętrza i zewnętrza dla narożników."
         )
     ccw = signed_area2 > 0
     winding = "CCW" if ccw else "CW"
@@ -367,25 +361,25 @@ def calculate(
     """Compute the full, auditable bill of materials (BOM) for a wall."""
     sys = get_system(system)
     if faces not in (1, 2):
-        raise ValueError("`faces` must be 1 or 2.")
+        raise ValueError("`faces` musi być 1 lub 2.")
     if not segments:
-        raise ValueError("No wall segments provided.")
+        raise ValueError("Nie podano odcinków ścian.")
 
     widths, warnings = _resolve_widths(sys, available_widths)
     if not sys.verified:
         warnings.append(
-            f"The {sys.name} catalog uses DEFAULT values to be VERIFIED against the "
-            f"official BAUKRANE catalog ({sys.notes})"
+            f"Katalog {sys.name} używa wartości DOMYŚLNYCH — zweryfikuj je w "
+            f"oficjalnym katalogu BAUKRANE ({sys.notes})"
         )
     if pressure_kn_m2 is not None and pressure_kn_m2 > sys.max_pressure_kn_m2:
         warnings.append(
-            f"Requested concrete pressure {pressure_kn_m2} kN/m2 exceeds the limit "
-            f"for {sys.name} ({sys.max_pressure_kn_m2} kN/m2). Consider a stronger system."
+            f"Podane ciśnienie betonu {pressure_kn_m2} kN/m2 przekracza limit "
+            f"systemu {sys.name} ({sys.max_pressure_kn_m2} kN/m2). Rozważ mocniejszy system."
         )
     if faces == 2:
         warnings.append(
-            "Assuming TWO formwork faces per segment (input = wall centerlines). "
-            "If your input already lists both faces separately, set faces=1 to avoid doubling."
+            "Przyjęto DWIE strony szalunku na odcinek (wejście = osie ścian). "
+            "Jeśli podajesz już obie strony osobno, ustaw faces=1, aby uniknąć podwojenia."
         )
 
     results = [_calculate_segment(seg, sys, faces, widths) for seg in segments]
@@ -477,13 +471,13 @@ def calculate(
         "units": UNITS,
         "assumptions": {
             "faces": faces,
-            "corner_rule": "convex=outer, concave=inner; one corner piece per course",
+            "corner_rule": "wypukły=zewn., wklęsły=wewn.; jeden element narożnikowy na warstwę",
             "tie_spacing_cm": {"horizontal": sys.tie_spacing_h, "vertical": sys.tie_spacing_v},
             "max_prop_spacing_cm": sys.max_prop_spacing,
             "panel_heights_considered_cm": list(sys.panel_heights),
-            "width_policy": "minimize timber leftover, then panel count",
-            "height_policy": "stack panels to reach wall height; top overshoot not cut",
-            "hardware_coeffs": "approximate; calibrate against DTR",
+            "width_policy": "minimalizuj resztkę deski, potem liczbę płyt",
+            "height_policy": "układaj płyty w pionie do wysokości ściany; nadwyżkę górną nie tnij",
+            "hardware_coeffs": "przybliżone; skalibruj wg DTR",
         },
         "input_echo": {
             "geometry_source": geometry_source,
@@ -533,17 +527,17 @@ def calculate(
             "horizontal_timber_m2": timber_area,
             "horizontal_timber_pct": timber_pct,
             "note": (
-                "area_from_panels = geometry + vertical_overshoot (panels above "
-                "pour line) - horizontal_timber (client-side infill)."
+                "area_from_panels = geometria + nadwyżka_pionowa (płyty ponad "
+                "linią zalewu) − deski_poziome (wypełnienie po stronie klienta)."
             ),
         },
         "warnings": warnings,
         "disclaimer": DISCLAIMER,
         "method": (
-            "Estimator: horizontal DP cover (timber infill), vertical panel "
-            f"stacking (overshoot, no cutting), {faces} face(s), corners per "
-            f"course, ties on a grid, props every max {sys.max_prop_spacing / 100:.2f} m, "
-            "hardware from catalog coefficients."
+            "Estymator: poziome pokrycie DP (deski), pionowy układ płyt "
+            f"(nadwyżka bez cięcia), {faces} strona/strony, narożniki na warstwę, "
+            f"wiązania w siatce, podpory co max {sys.max_prop_spacing / 100:.2f} m, "
+            "akcesoria wg współczynników katalogowych."
         ),
     }
 
@@ -553,10 +547,10 @@ def _assemble_hardware(sys: FormworkSystem, bases: dict, connectors: int) -> lis
     hardware: list[dict] = []
     if connectors > 0:
         hardware.append({
-            "item": "BAUTEKK connector",
+            "item": "Złącze BAUTEKK" if sys.name == "BAUTEKK" else f"Złącze {sys.name}",
             "article_no": "7270B00001" if sys.name == "BAUTEKK" else None,
             "quantity": connectors,
-            "basis": "vertical_joint (DTR: 5/4/3 per joint by height)",
+            "basis": "spoina_pionowa (DTR: 5/4/3 na spoinę wg wysokości płyty)",
             "approximate": False,
         })
     for rule in sys.hardware:
@@ -637,17 +631,17 @@ def polygon_to_cell(
     `leg_cm` on each inner face; the outer "0" corner occupies nothing.
     """
     if not math.isfinite(thickness) or thickness <= 0:
-        raise ValueError("wall thickness must be a positive number [cm].")
+        raise ValueError("Grubość ściany musi być dodatnią liczbą [cm].")
     sys = get_system(system)
 
     for p in points:
         if not (math.isfinite(p[0]) and math.isfinite(p[1])):
-            raise ValueError(f"Polygon has a non-finite coordinate: {p}.")
+            raise ValueError(f"Wielokąt ma nieprawidłową współrzędną: {p}.")
     pts = _dedup_points(points, closed=True)
     n = len(pts)
     if n < 3:
         raise ValueError(
-            f"A closed cell requires at least 3 distinct points (got {n})."
+            f"Komórka zamknięta wymaga co najmniej 3 różnych punktów (jest {n})."
         )
 
     signed_area2 = sum(
@@ -655,7 +649,9 @@ def polygon_to_cell(
         for i in range(n)
     )
     if abs(signed_area2) < 1e-6:
-        raise ValueError("Polygon is degenerate (near-zero area / collinear points).")
+        raise ValueError(
+            "Wielokąt jest zdegenerowany (zerowy obszar / punkty współliniowe)."
+        )
     ccw = signed_area2 > 0
     winding = "CCW" if ccw else "CW"
 
@@ -722,9 +718,9 @@ def calculate_cell(
     """
     sys = get_system(system)
     if not walls:
-        raise ValueError("No walls provided.")
+        raise ValueError("Nie podano ścian.")
     if wall_thickness_cm is None or not math.isfinite(wall_thickness_cm) or wall_thickness_cm <= 0:
-        raise ValueError("closed-cell mode requires a positive wall_thickness_cm.")
+        raise ValueError("Tryb komórki zamkniętej wymaga dodatniej grubości ściany (wall_thickness_cm).")
     t = float(wall_thickness_cm)
 
     widths, warnings = _resolve_widths(sys, available_widths)
@@ -734,31 +730,30 @@ def calculate_cell(
     # panel joints coincide on both faces regardless of the exact leg.
     inner_leg = float(inner_corner_leg_cm) if inner_corner_leg_cm else float(sys.inner_corner.leg_cm)
     if inner_leg <= 0:
-        raise ValueError("inner corner leg must be positive for closed-cell alignment.")
+        raise ValueError("Noga narożnika wewn. musi być dodatnia (wyrównanie fug w komórce zamkniętej).")
     filler_w = int(round(inner_leg + t))
     joints_align = True  # guaranteed by construction (filler = leg + thickness)
     filler_is_panel = filler_w in set(widths)
-    filler_item = (f"Panel {filler_w}x{{h}} (corner filler)" if filler_is_panel
-                   else f"H{filler_w} corner filler (plyta {filler_w})")
+    filler_item = (f"Płyta {filler_w}x{{h}} (wypełniacz narożnikowy)" if filler_is_panel
+                   else f"H{filler_w} wypełniacz narożnikowy (płyta {filler_w})")
     if not filler_is_panel:
         warnings.append(
-            f"Corner filler H{filler_w} (= inner leg {int(inner_leg)} + thickness "
-            f"{int(t)}) is a DEDICATED corner element to order separately, not a "
-            f"standard wall panel."
+            f"Wypełniacz narożnikowy H{filler_w} (= noga wewn. {int(inner_leg)} + grubość "
+            f"{int(t)}) to OSOBNY element narożnikowy do zamówienia, nie standardowa płyta ścienna."
         )
     if not sys.verified:
         warnings.append(
-            f"The {sys.name} catalog uses DEFAULT values to be VERIFIED against the "
-            f"official BAUKRANE catalog ({sys.notes})"
+            f"Katalog {sys.name} używa wartości DOMYŚLNYCH — zweryfikuj je w "
+            f"oficjalnym katalogu BAUKRANE ({sys.notes})"
         )
     if pressure_kn_m2 is not None and pressure_kn_m2 > sys.max_pressure_kn_m2:
         warnings.append(
-            f"Requested concrete pressure {pressure_kn_m2} kN/m2 exceeds the limit "
-            f"for {sys.name} ({sys.max_pressure_kn_m2} kN/m2). Consider a stronger system."
+            f"Podane ciśnienie betonu {pressure_kn_m2} kN/m2 przekracza limit "
+            f"systemu {sys.name} ({sys.max_pressure_kn_m2} kN/m2). Rozważ mocniejszy system."
         )
     warnings.append(
-        f"Closed-cell (aligned joints): identical flat run on both faces; each "
-        f"corner = outer '0' + 2x{filler_w} filler panel + inner {int(inner_leg)}x{int(inner_leg)}."
+        f"Komórka zamknięta (fugi zgrane): ten sam bieg płyt na obu stronach; "
+        f"każdy narożnik = zewn. „0” + 2×{filler_w} wypełniacz + wewn. {int(inner_leg)}×{int(inner_leg)}."
     )
 
     panel_totals: dict[str, int] = {}
@@ -867,15 +862,15 @@ def calculate_cell(
                               {"type": "inner_corner", "width_cm": int(inner_leg)})
             return pieces
 
-        v_layout = [f"{h}cm" for h in sorted(courses, reverse=True) for _ in range(courses[h])]
+        v_layout = [f"{h} cm" for h in sorted(courses, reverse=True) for _ in range(courses[h])]
         if overshoot > 0:
-            v_layout.append(f"(top overshoot {overshoot}cm)")
+            v_layout.append(f"(nadwyżka górna {overshoot} cm)")
         seg_out.append({
             "label": w.label,
             "axis_length_cm": round(w.axis_length, 1),
             "height_cm": round(w.height, 1),
             "flat_run_cm": round(flat_run, 1),
-            "flat_panels_shared": [f"{cw}cm" for cw in flat_seq] + ([f"timber {int(timber)}cm"] if timber else []),
+            "flat_panels_shared": [f"{cw} cm" for cw in flat_seq] + ([f"deska {int(timber)} cm"] if timber else []),
             "outer_face": {"length_cm": round(outer_face_len, 1), "pieces": face_pieces(True)},
             "inner_face": {"length_cm": round(inner_face_len, 1), "pieces": face_pieces(False)},
             "courses_vertical": v_layout,
@@ -914,10 +909,10 @@ def calculate_cell(
         matches_catalog = abs(inner_leg - catalog_leg) < 1e-6
         bom_corners.append({
             "kind": "inner", "height_cm": h,
-            "description": f"{sys.name} inner corner {int(inner_leg)}x{int(inner_leg)}x{h}",
+            "description": f"{sys.name} narożnik wewn. {int(inner_leg)}x{int(inner_leg)}x{h}",
             "article_no": sys.inner_corner.article_for(h) if matches_catalog else None,
             "quantity": qty,
-            "note": None if matches_catalog else f"non-catalog leg {int(inner_leg)}cm - to order separately",
+            "note": None if matches_catalog else f"noga spoza katalogu {int(inner_leg)} cm — do zamówienia osobno",
         })
 
     bom_fillers = []
@@ -926,13 +921,13 @@ def calculate_cell(
         filler_area += (filler_w / 100.0) * (h / 100.0) * qty
         bom_fillers.append({
             "height_cm": h,
-            "description": (f"{sys.name} panel {filler_w}x{h} (used as corner filler)"
+            "description": (f"{sys.name} płyta {filler_w}x{h} (jako wypełniacz narożnikowy)"
                             if filler_is_panel
-                            else f"H{filler_w} corner filler {filler_w}x{h} (dedicated element)"),
+                            else f"H{filler_w} wypełniacz narożnikowy {filler_w}x{h} (element dedykowany)"),
             "width_cm": filler_w,
             "is_standard_panel": filler_is_panel,
             "quantity": qty,
-            "note": None if filler_is_panel else "dedicated corner filler - order separately",
+            "note": None if filler_is_panel else "dedykowany wypełniacz narożnikowy — zamówić osobno",
         })
 
     return {
@@ -942,26 +937,26 @@ def calculate_cell(
         "max_pressure_kn_m2": sys.max_pressure_kn_m2,
         "units": UNITS,
         "corner_template": {
-            "outer_corner": "0 (zero) + filler each side",
+            "outer_corner": "0 (zero) + wypełniacz z każdej strony",
             "outer_filler_width_cm": filler_w,
             "filler_is_standard_panel": filler_is_panel,
             "inner_corner_cm": f"{int(inner_leg)}x{int(inner_leg)}",
-            "alignment_rule": "filler = inner_leg + thickness -> flat runs equal on both faces (joints align)",
+            "alignment_rule": "wypełniacz = noga_wewn. + grubość → ten sam bieg płyt na obu stronach (fugi zgrane)",
             "joints_align": joints_align,
         },
         "assumptions": {
             "mode": "closed_cell_aligned",
             "wall_thickness_cm": t,
             "inner_corner_leg_cm": inner_leg,
-            "corner_rule": "each corner = 1 outer '0' + 2 filler panels + 1 inner corner element, per course",
-            "joint_rule": "flat run identical on both faces so vertical joints coincide",
+            "corner_rule": "każdy narożnik = 1 zewn. „0” + 2 wypełniacze + 1 element narożnika wewn., na warstwę",
+            "joint_rule": "ten sam bieg płyt na obu stronach — pionowe fugi się pokrywają",
             "panel_widths_used_cm": list(widths),
             "tie_spacing_cm": {"horizontal": sys.tie_spacing_h, "vertical": sys.tie_spacing_v},
             "max_prop_spacing_cm": sys.max_prop_spacing,
             "panel_heights_considered_cm": list(sys.panel_heights),
-            "width_policy": "minimize timber leftover, then panel count",
-            "height_policy": "stack panels to reach wall height; top overshoot not cut",
-            "hardware_coeffs": "approximate; calibrate against DTR",
+            "width_policy": "minimalizuj resztkę deski, potem liczbę płyt",
+            "height_policy": "układaj płyty w pionie do wysokości ściany; nadwyżkę górną nie tnij",
+            "hardware_coeffs": "przybliżone; skalibruj wg DTR",
         },
         "input_echo": {
             "geometry_source": "closed_cell",
@@ -998,14 +993,14 @@ def calculate_cell(
             "vertical_overshoot_pct": overshoot_pct,
             "horizontal_timber_m2": round(timber_area, 3),
             "horizontal_timber_pct": timber_pct,
-            "note": "Flat-panel + filler face area; the '0' corner has no width.",
+            "note": "Powierzchnia płyt + wypełniaczy; narożnik „0” nie ma szerokości.",
         },
         "warnings": warnings,
         "disclaimer": DISCLAIMER,
         "method": (
-            "Closed-cell layout planner: shared flat run per wall (aligned joints), "
-            f"corner = 0 + 2x{filler_w} filler + inner {int(inner_leg)}x{int(inner_leg)}, "
-            "ties/props per wall on the axis, connectors from the DTR per-joint rule."
+            "Planer komórki zamkniętej: wspólny bieg płyt na ścianę (fugi zgrane), "
+            f"narożnik = 0 + 2×{filler_w} wypełniacz + wewn. {int(inner_leg)}×{int(inner_leg)}, "
+            "wiązania/podpory na osi ściany, złącza wg DTR na spoinę."
         ),
     }
 
@@ -1102,7 +1097,7 @@ def reconcile_stock(result: dict, stock: dict[str, int]) -> dict:
         if short > 0:
             fits = False
         lines.append({
-            "item": item if item in _CORNER_KEYS else f"panel {item}cm",
+            "item": item if item in _CORNER_KEYS else f"płyta {item} cm",
             "key": item,
             "needed": need,
             "available": avail,
@@ -1119,20 +1114,20 @@ def reconcile_stock(result: dict, stock: dict[str, int]) -> dict:
             missing_cm = line["shortfall"] * width
             used, remaining = _greedy_cover(missing_cm, surplus_widths)
             suggestions.append({
-                "short_item": f"panel {width}cm",
+                "short_item": f"płyta {width} cm",
                 "short_qty": line["shortfall"],
                 "missing_length_cm": missing_cm,
-                "cover_with": {f"{w}cm": n for w, n in sorted(used.items(), reverse=True)},
+                "cover_with": {f"{w} cm": n for w, n in sorted(used.items(), reverse=True)},
                 "uncovered_cm": remaining,
-                "note": ("covered from surplus (verify joint alignment)"
+                "note": ("pokryto z nadwyżki magazynowej (sprawdź wyrównanie fug)"
                          if remaining == 0
-                         else f"{remaining} cm still missing - order more or use timber"),
+                         else f"brakuje jeszcze {remaining} cm — domów lub użyj deski"),
             })
 
     return {
         "fits_in_stock": fits,
         "items": lines,
         "substitution_suggestions": suggestions,
-        "note": ("Hard stock check. Substitution is a greedy, non-binding "
-                 "suggestion; keeping vertical joints aligned may require a re-plan."),
+        "note": ("Twarda kontrola stanu magazynowego. Zamienniki to zachłanne "
+                 "propozycje niewiążące; zachowanie pionowych fug może wymagać nowego planu."),
     }

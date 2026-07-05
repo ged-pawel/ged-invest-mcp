@@ -68,8 +68,8 @@ def normalize_class(consistency: str) -> str:
     c = _ALIASES.get(c, c)
     if c not in _CLASS_TERMS:
         raise ValueError(
-            f"Unknown consistency class '{consistency}'. Valid: "
-            f"{', '.join(_CLASS_TERMS)} (SVB is an alias for SCC)."
+            f"Nieznana klasa konsystencji „{consistency}”. Dozwolone: "
+            f"{', '.join(_CLASS_TERMS)} (SVB to alias SCC)."
         )
     return c
 
@@ -95,9 +95,9 @@ def concrete_pressure(
         max_pouring_rate_m_per_h: optional process cap (e.g. DTR BAUTEKK 2 m/h).
     """
     if not math.isfinite(pouring_rate_m_per_h) or pouring_rate_m_per_h <= 0:
-        raise ValueError("pouring_rate_m_per_h must be a positive number.")
+        raise ValueError("pouring_rate_m_per_h musi być dodatnią liczbą.")
     if not math.isfinite(wall_height_m) or wall_height_m <= 0:
-        raise ValueError("wall_height_m must be a positive number.")
+        raise ValueError("wall_height_m musi być dodatnią liczbą.")
 
     consistency = normalize_class(consistency_class)
     k1 = _k1(consistency, setting_time_h)
@@ -106,7 +106,7 @@ def concrete_pressure(
     characteristic = _characteristic(consistency, pouring_rate_m_per_h, k1, k2)
     hydrostatic = concrete_unit_weight_kn_m3 * wall_height_m
     design_pressure = min(characteristic, hydrostatic)
-    governing = "hydrostatic" if hydrostatic < characteristic else "characteristic (DIN 18218)"
+    governing = "hydrostatyczne" if hydrostatic < characteristic else "charakterystyczne (DIN 18218)"
 
     warnings: list[str] = []
     within_limit: bool | None = None
@@ -115,9 +115,9 @@ def concrete_pressure(
         within_limit = design_pressure <= allowed_pressure_kn_m2
         if not within_limit:
             warnings.append(
-                f"Design pressure {round(design_pressure, 1)} kN/m2 EXCEEDS the allowed "
-                f"{allowed_pressure_kn_m2} kN/m2. Reduce the pouring rate, use a stiffer/"
-                f"colder mix, or a stronger formwork system."
+                f"Ciśnienie obliczeniowe {round(design_pressure, 1)} kN/m2 PRZEKRACZA dopuszczalne "
+                f"{allowed_pressure_kn_m2} kN/m2. Zmniejsz tempo betonowania, użyj sztywniejszej/"
+                f"chłodniejszej mieszanki lub mocniejszego systemu szalunkowego."
             )
         # invert the formula to get the max pouring rate that stays within the limit
         slope, intercept = _CLASS_TERMS[consistency]
@@ -130,12 +130,12 @@ def concrete_pressure(
 
     if max_pouring_rate_m_per_h is not None and pouring_rate_m_per_h > max_pouring_rate_m_per_h:
         warnings.append(
-            f"Pouring rate {pouring_rate_m_per_h} m/h exceeds the process limit "
+            f"Tempo betonowania {pouring_rate_m_per_h} m/h przekracza limit technologiczny "
             f"{max_pouring_rate_m_per_h} m/h."
         )
 
     return {
-        "standard": "DIN 18218:2010-01 (simplified, 15 C reference)",
+        "standard": "DIN 18218:2010-01 (uproszczony, odniesienie 15 °C)",
         "inputs": {
             "pouring_rate_m_per_h": pouring_rate_m_per_h,
             "wall_height_m": wall_height_m,
@@ -154,8 +154,8 @@ def concrete_pressure(
         "units": {"pressure": "kN/m2", "rate": "m/h", "height": "m", "setting_time": "h"},
         "warnings": warnings,
         "disclaimer": (
-            "Simplified DIN 18218 estimate at the 15 C reference; temperature and "
-            "admixture corrections are NOT applied. The real fresh concrete pressure "
-            "and the safe pouring rate are the site manager's responsibility."
+            "Uproszczone oszacowanie wg DIN 18218 przy odniesieniu 15 °C; korekty "
+            "temperatury i domieszek NIE są uwzględnione. Rzeczywiste ciśnienie "
+            "świeżego betonu i bezpieczne tempo betonowania leżą w gestii kierownika budowy."
         ),
     }

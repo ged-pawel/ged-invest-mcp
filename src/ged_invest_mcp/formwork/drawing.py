@@ -29,6 +29,14 @@ _WIDTH_COLORS = {
     60: "#9dc3e6", 50: "#c9a0dc", 45: "#ffe08a", 30: "#f6c1c1", 25: "#d9d9d9",
 }
 _DEFAULT_COLOR = "#cccccc"
+_MARGIN = 24.0
+_LABEL_W = 46.0          # left gutter shared by plan + elevations (ZEWN./WEWN.)
+_TITLE_Y = 20.0            # main document title
+_GAP_AFTER_TITLE = 26.0    # space below main title before plan block
+_PLAN_SUBTITLE_GAP = 16.0  # plan subtitle above the drawing
+_PLAN_TOP_PAD = 20.0       # room above outer rect (top-wall width labels)
+_PLAN_BOTTOM_PAD = 22.0    # room below outer rect (bottom labels + os dim)
+_PLAN_DIM_SIDE = 30.0      # room left of plan for vertical os label
 
 
 def _piece_color(piece: dict) -> str:
@@ -81,6 +89,91 @@ def _flat_widths(wall: dict) -> list[int]:
     ]
 
 
+def _outer_segments(wall: dict) -> list[tuple[float, str]]:
+    """Coloured run along the outer face (same palette as elevations)."""
+    return [
+        (float(p["width_cm"]), _piece_color(p))
+        for p in wall["outer_face"]["pieces"]
+        if float(p.get("width_cm", 0)) > 0
+    ]
+
+
+def _label_plan_piece(parts: list[str], cx: float, cy: float, width_cm: float,
+                      *, anchor: str = "middle") -> None:
+    """Width label on the plan (same threshold as elevations: >= 40 cm)."""
+    if width_cm >= 40:
+        parts.append(_text(cx, cy, f"{int(width_cm)}", size=7, anchor=anchor))
+
+
+def _band_horizontal(parts: list[str], x0: float, y_out: float, y_in: float,
+                     segs: list[tuple[float, str]], scale: float,
+                     X, Y, *, reverse: bool = False,
+                     labels_outside: str = "below") -> None:
+    """Fill a horizontal wall band with coloured panel segments."""
+    y_top = min(Y(y_out), Y(y_in))
+    band_h = abs(Y(y_in) - Y(y_out))
+    x = x0
+    if reverse:
+        for w, col in segs:
+            x -= w
+            x_px = X(x)
+            w_px = w * scale
+            parts.append(_rect(x_px, y_top, w_px, band_h, col))
+            ly = y_top + band_h + 8 if labels_outside == "below" else y_top - 8
+            _label_plan_piece(parts, x_px + w_px / 2, ly, w)
+    else:
+        for w, col in segs:
+            x_px = X(x)
+            w_px = w * scale
+            parts.append(_rect(x_px, y_top, w_px, band_h, col))
+            ly = y_top + band_h + 8 if labels_outside == "below" else y_top - 8
+            _label_plan_piece(parts, x_px + w_px / 2, ly, w)
+            x += w
+
+
+def _band_vertical(parts: list[str], x_out: float, x_in: float, y0: float,
+                   segs: list[tuple[float, str]], scale: float,
+                   X, Y, *, reverse: bool = False,
+                   labels_outside: str = "left") -> None:
+    """Fill a vertical wall band with coloured panel segments."""
+    x_left = min(X(x_out), X(x_in))
+    band_w = abs(X(x_in) - X(x_out))
+    anchor = "end" if labels_outside == "left" else "start"
+    lx = x_left - 5 if labels_outside == "left" else x_left + band_w + 5
+    y = y0
+    if reverse:
+        for seg_w, col in segs:
+            y -= seg_w
+            y_top = Y(y + seg_w)
+            seg_h = Y(y) - y_top
+            parts.append(_rect(x_left, y_top, band_w, seg_h, col))
+            _label_plan_piece(parts, lx, y_top + seg_h / 2, seg_w, anchor=anchor)
+    else:
+        for seg_w, col in segs:
+            y_top = Y(y + seg_w)
+            seg_h = Y(y) - y_top
+            parts.append(_rect(x_left, y_top, band_w, seg_h, col))
+            _label_plan_piece(parts, lx, y_top + seg_h / 2, seg_w, anchor=anchor)
+            y += seg_w
+
+
+def _colored_wall_bands(parts: list[str], walls: list[dict], ax_l: float, ax_s: float,
+                        t: float, scale: float, X, Y) -> None:
+    """Paint each wall band on the plan using outer-face piece colours."""
+    if len(walls) != 4:
+        return
+    h = t / 2.0
+    segs = [_outer_segments(w) for w in walls]
+    # polygon CCW from (0,0): bottom +x, right +y, top -x, left -y
+    _band_horizontal(parts, -h, -h, -h + t, segs[0], scale, X, Y, labels_outside="below")
+    _band_vertical(parts, ax_l + h - t, ax_l + h, -h, segs[1], scale, X, Y,
+                   labels_outside="right")
+    _band_horizontal(parts, ax_l + h, ax_s + h - t, ax_s + h, segs[2], scale, X, Y,
+                     reverse=True, labels_outside="above")
+    _band_vertical(parts, -h, -h + t, ax_s + h, segs[3], scale, X, Y,
+                   reverse=True, labels_outside="left")
+
+
 def _dedupe_walls(walls: list[dict]) -> list[tuple[dict, int]]:
     """Group identical walls; returns [(wall, count), ...] preserving order."""
     out: list[list[Any]] = []
@@ -106,10 +199,10 @@ def _draw_elevation(wall: dict, count: int, thickness: float,
     ph = h_cm * scale                      # strip height in px
     gap = 12.0                             # gap between the two faces
     inner_offset = thickness * scale       # inner face inset so flat runs align
-    label_w = 46.0
+    label_w = _LABEL_W
     title = (
-        f'Wall {wall.get("label", "?")}  L(axis)={wall.get("axis_length_cm")} cm  '
-        f'x{count}  -  outer / inner face (aligned joints)'
+        f'Ściana {wall.get("label", "?")}  L(os)={wall.get("axis_length_cm")} cm  '
+        f'x{count}  —  elewacje obu stron (fugi zgrane)'
     )
     parts.append(_text(ox + label_w, oy, title, size=11, anchor="start", weight="bold"))
     top = oy + 10
@@ -129,8 +222,8 @@ def _draw_elevation(wall: dict, count: int, thickness: float,
 
     outer_end = strip(top, wall["outer_face"]["pieces"], 0.0)
     strip(top + ph + gap, wall["inner_face"]["pieces"], inner_offset)
-    parts.append(_text(ox + label_w - 4, top + ph / 2, "OUT", size=9, anchor="end", weight="bold"))
-    parts.append(_text(ox + label_w - 4, top + ph + gap + ph / 2, "IN", size=9, anchor="end", weight="bold"))
+    parts.append(_text(ox + label_w - 4, top + ph / 2, "ZEWN.", size=9, anchor="end", weight="bold"))
+    parts.append(_text(ox + label_w - 4, top + ph + gap + ph / 2, "WEWN.", size=9, anchor="end", weight="bold"))
 
     # aligned vertical joints (red dashed) at the shared flat-run boundaries
     x_j = ox + label_w + filler_w * scale
@@ -165,8 +258,6 @@ def _rectangle_plan(result: dict, ox: float, oy: float, scale: float
     h = t / 2.0
 
     walls = result["layout_draft"]
-    long_flat = _flat_widths(walls[0])
-    short_flat = _flat_widths(walls[1]) if len(walls) > 1 else long_flat
 
     # model -> svg px (flip Y so it reads like the plan)
     outer_w = (ax_l + t) * scale
@@ -176,11 +267,15 @@ def _rectangle_plan(result: dict, ox: float, oy: float, scale: float
         return ox + (mx + h) * scale
 
     def Y(my: float) -> float:
-        return oy + outer_h - (my + h) * scale
+        return oy + _PLAN_TOP_PAD + outer_h - (my + h) * scale
 
-    parts: list[str] = [_text(ox, oy - 10, "PLAN (closed cell, aligned joints)", size=12, anchor="start", weight="bold")]
+    parts: list[str] = [
+        _text(ox, oy - _PLAN_SUBTITLE_GAP, "PLAN (komórka zamknięta, fugi zgrane)",
+              size=12, anchor="start", weight="bold"),
+    ]
     parts.append(_rect(X(-h), Y(ax_s + h), outer_w, outer_h, "#efefef", stroke="#222", sw=1.5))
     parts.append(_rect(X(h), Y(ax_s - h), (ax_l - t) * scale, (ax_s - t) * scale, "#ffffff", stroke="#222", sw=1.5))
+    _colored_wall_bands(parts, walls, ax_l, ax_s, t, scale, X, Y)
     # axis (dashed blue)
     parts.append(
         f'<rect x="{X(0):.1f}" y="{Y(ax_s):.1f}" width="{ax_l*scale:.1f}" '
@@ -188,33 +283,7 @@ def _rectangle_plan(result: dict, ox: float, oy: float, scale: float
         f'stroke-width="0.8" stroke-dasharray="5,3"/>'
     )
 
-    # division ticks along each wall (across the thickness band)
-    def ticks_h(y_out: float, y_in: float) -> None:
-        x = -h
-        seq = [45] + long_flat + [45]
-        pos = [x]
-        for w in seq:
-            x += w
-            pos.append(x)
-        for px in pos:
-            parts.append(_line(X(px), Y(y_out), X(px), Y(y_in), color="#666", sw=0.7))
-
-    def ticks_v(x_out: float, x_in: float) -> None:
-        y = -h
-        seq = [45] + short_flat + [45]
-        pos = [y]
-        for w in seq:
-            y += w
-            pos.append(y)
-        for py in pos:
-            parts.append(_line(X(x_out), Y(py), X(x_in), Y(py), color="#666", sw=0.7))
-
-    ticks_h(-h, -h + t)              # bottom long wall
-    ticks_h(ax_s - h + t, ax_s + h)  # top long wall  (approx band)
-    ticks_v(-h, -h + t)              # left short wall
-    ticks_v(ax_l - h + t, ax_l + h)  # right short wall
-
-    # corner markers: filler (yellow), inner corner (green), NZ 0 (blue dot)
+    # corner markers on top of coloured bands: filler, inner corner, NZ 0
     def corner(cx: float, cy: float, sx: int, sy: int) -> None:
         parts.append(_rect(min(X(cx), X(cx + sx * filler_w)), min(Y(cy), Y(cy + sy * t)),
                            abs(filler_w * scale), abs(t * scale), _TYPE_COLORS["filler_panel"]))
@@ -231,10 +300,34 @@ def _rectangle_plan(result: dict, ox: float, oy: float, scale: float
     corner(ax_l + h, ax_s + h, -1, -1)
     corner(-h, ax_s + h, +1, -1)
 
-    parts.append(_text(X(ax_l / 2), Y(-h) + 20, f'axis {ax_l/100:.2f} m', size=10))
-    parts.append(_text(X(-h) - 22, Y(ax_s / 2), f'axis {ax_s/100:.2f} m', size=10))
+    parts.append(_text(X(ax_l / 2), Y(-h) + _PLAN_BOTTOM_PAD, f'os {ax_l/100:.2f} m', size=10))
+    parts.append(_text(ox - _PLAN_DIM_SIDE, Y(ax_s / 2), f'os {ax_s/100:.2f} m', size=10))
 
-    return "\n".join(parts), outer_w + 60, outer_h + 40
+    plan_h = _PLAN_TOP_PAD + outer_h + _PLAN_BOTTOM_PAD + 12
+    return "\n".join(parts), outer_w + _LABEL_W + _PLAN_DIM_SIDE, plan_h
+
+
+def _wall_outer_width_cm(wall: dict, filler_w: int) -> float:
+    """Total drawn width of one elevation (outer face pieces with width > 0)."""
+    total = 0.0
+    for p in wall["outer_face"]["pieces"]:
+        w = float(p.get("width_cm", 0))
+        if w > 0:
+            total += w
+    return total or float(wall.get("axis_length_cm", 0)) + 2 * filler_w
+
+
+def _auto_scale(result: dict, requested: float, max_content_px: float = 920.0) -> float:
+    """Pick scale so the widest elevation strip fits within max_content_px."""
+    filler_w = int(result.get("corner_template", {}).get("outer_filler_width_cm", 45))
+    label_w = _LABEL_W  # px reserved for OUT/IN labels
+    widest_cm = 0.0
+    for wall in result.get("layout_draft", []):
+        widest_cm = max(widest_cm, _wall_outer_width_cm(wall, filler_w))
+    if widest_cm <= 0:
+        return requested
+    fit = (max_content_px - label_w) / widest_cm
+    return min(requested, fit)
 
 
 def render_layout_svg(result: dict, scale: float = 0.32) -> str:
@@ -242,31 +335,35 @@ def render_layout_svg(result: dict, scale: float = 0.32) -> str:
 
     Args:
         result: the dict returned by ``calculator.calculate_cell``.
-        scale: pixels per centimetre.
+        scale: pixels per centimetre (capped automatically so elevation strips fit).
     """
     if "layout_draft" not in result:
-        raise ValueError("result has no 'layout_draft' (closed-cell calculation required).")
+        raise ValueError("Wynik nie zawiera 'layout_draft' (wymagane obliczenie komórki zamkniętej).")
 
     thickness = float(result.get("assumptions", {}).get("wall_thickness_cm", 0))
     filler_w = int(result.get("corner_template", {}).get("outer_filler_width_cm", 0))
+    elev_scale = _auto_scale(result, scale)
 
-    margin = 24.0
-    y = margin
+    margin = _MARGIN
+    y = _TITLE_Y + 18.0 + _GAP_AFTER_TITLE
     body: list[str] = []
     max_w = 0.0
 
-    plan = _rectangle_plan(result, margin, y + 16, scale)
+    # Plan uses the same px/cm scale and horizontal origin as the elevation strips
+    # so panel widths line up visually between rzut and elewacje.
+    plan = _rectangle_plan(result, margin + _LABEL_W, y, elev_scale)
     if plan:
         svg_plan, pw, ph = plan
         body.append(svg_plan)
         max_w = max(max_w, pw)
-        y += ph + 48
+        y += ph + 32
 
-    for wall, count in _dedupe_walls(result["layout_draft"]):
-        svg_el, ew, eh = _draw_elevation(wall, count, thickness, filler_w, margin, y, scale)
+    for wall, count in sorted(_dedupe_walls(result["layout_draft"]),
+                              key=lambda wc: -wc[0].get("axis_length_cm", 0)):
+        svg_el, ew, eh = _draw_elevation(wall, count, thickness, filler_w, margin, y, elev_scale)
         body.append(svg_el)
         max_w = max(max_w, ew)
-        y += eh + 16
+        y += eh + 12
 
     width = max_w + 2 * margin
     height = y + margin
@@ -275,9 +372,9 @@ def render_layout_svg(result: dict, scale: float = 0.32) -> str:
         f'height="{height:.0f}" viewBox="0 0 {width:.0f} {height:.0f}">'
     )
     bg = f'<rect x="0" y="0" width="{width:.0f}" height="{height:.0f}" fill="white"/>'
-    title = _text(margin, margin - 6,
-                  f'{result.get("system", "")} formwork draft - '
-                  f'{result.get("summary", {}).get("total_panels", "?")} panels, '
-                  f'{result.get("summary", {}).get("total_corners", "?")} corners',
+    title = _text(margin, _TITLE_Y,
+                  f'Szkic szalunku {result.get("system", "")} — '
+                  f'{result.get("summary", {}).get("total_panels", "?")} płyt, '
+                  f'{result.get("summary", {}).get("total_corners", "?")} narożników',
                   size=13, anchor="start", weight="bold")
     return "\n".join([header, bg, title, *body, "</svg>"])
