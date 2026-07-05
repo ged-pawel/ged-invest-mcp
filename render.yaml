@@ -11,3 +11,5 @@ services:
         value: http
       - key: HOST
         value: 0.0.0.0
+      - key: MCP_ALLOWED_HOSTS
+        value: ged-invest-mcp.onrender.com,ged-invest-mcp.onrender.com:*

@@ -20,6 +20,7 @@ import argparse
 import os
 
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 from starlette.requests import Request
 from starlette.responses import PlainTextResponse
 
@@ -78,6 +79,23 @@ def main() -> None:
 
     mcp.settings.host = args.host
     mcp.settings.port = args.port
+
+    # FastMCP defaults to host=127.0.0.1 and enables localhost-only DNS rebinding
+    # protection. On cloud hosts the public Host header (e.g. *.onrender.com) would
+    # then be rejected with HTTP 421. Reconfigure before starting HTTP transport.
+    allowed_raw = os.environ.get("MCP_ALLOWED_HOSTS", "").strip()
+    if allowed_raw:
+        hosts = [h.strip() for h in allowed_raw.split(",") if h.strip()]
+        mcp.settings.transport_security = TransportSecuritySettings(
+            enable_dns_rebinding_protection=True,
+            allowed_hosts=hosts,
+        )
+    else:
+        mcp.settings.transport_security = TransportSecuritySettings(
+            enable_dns_rebinding_protection=False,
+        )
+    mcp._session_manager = None  # lazy init; must pick up new security settings
+
     if transport == "http":
         mcp.run(transport="streamable-http")
     else:
