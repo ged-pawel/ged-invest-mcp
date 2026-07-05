@@ -115,7 +115,7 @@ def register(mcp: FastMCP) -> None:
         ] = False,
         available_stock: Annotated[
             dict[str, int] | None,
-            Field(description="HARD quantity limits on hand. Keys: panel WIDTHS as strings (e.g. {\"90\":58,\"75\":26,\"70\":24,\"60\":26,\"45\":20,\"25\":10}) plus reserved keys 'outer_corner', 'inner_corner' and 'filler' (dedicated filler only). Adds a 'stock_check' with shortfalls and substitution suggestions."),
+            Field(description="HARD quantity limits on hand. Keys: panel WIDTHS as strings (e.g. {\"90\":58,\"75\":26,...}) plus 'outer_corner', 'inner_corner'. When given with a closed cell (polygon+wall_thickness), the flat panel layout is RE-PLANNED to fit stock (same joints on both faces). Also adds 'stock_check'."),
         ] = None,
     ) -> dict[str, Any]:
         """Compute the full, auditable bill of materials (BOM) for wall formwork.
@@ -153,6 +153,7 @@ def register(mcp: FastMCP) -> None:
                     inner_corner_leg_cm=inner_corner_leg,
                     polygon_points=points, polygon_winding=winding,
                     available_widths=widths,
+                    stock=available_stock,
                 )
                 if render_svg:
                     cell["layout_svg"] = drawing.render_layout_svg(cell)
@@ -204,6 +205,10 @@ def register(mcp: FastMCP) -> None:
             list[int] | None,
             Field(description="Restrict panels to in-stock widths [cm]."),
         ] = None,
+        available_stock: Annotated[
+            dict[str, int] | None,
+            Field(description="Hard stock limits (same as count_formwork); re-plans flat runs to fit."),
+        ] = None,
         scale: Annotated[
             float,
             Field(gt=0, le=2, description="SVG scale in pixels per centimetre (default 0.32)."),
@@ -226,14 +231,18 @@ def register(mcp: FastMCP) -> None:
             inner_corner_leg_cm=inner_corner_leg,
             polygon_points=points, polygon_winding=winding,
             available_widths=widths,
+            stock=available_stock,
         )
-        return {
+        out = {
             "system": cell["system"],
             "corner_template": cell["corner_template"],
             "summary": cell["summary"],
             "svg_mime_type": "image/svg+xml",
             "layout_svg": drawing.render_layout_svg(cell, scale=scale),
         }
+        if available_stock:
+            out["stock_check"] = calculator.reconcile_stock(cell, available_stock)
+        return out
 
     @mcp.tool()
     def concrete_pressure_check(

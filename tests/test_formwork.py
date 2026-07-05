@@ -454,3 +454,36 @@ def test_stock_check_fits_when_enough():
     chk = calculator.reconcile_stock(res, generous)
     assert chk["fits_in_stock"] is True
     assert chk["substitution_suggestions"] == []
+
+
+def _cell_825x1065(**kw):
+    poly = [(0, 0), (825, 0), (825, 1065), (0, 1065)]
+    walls, winding = calculator.polygon_to_cell(poly, height=150, thickness=25)
+    return calculator.calculate_cell(
+        walls, system="BAUTEKK", wall_thickness_cm=25, inner_corner_leg_cm=20,
+        available_widths=(90, 75, 70, 60, 50, 45, 25),
+        polygon_points=poly, polygon_winding=winding, **kw,
+    )
+
+
+def test_stock_replan_fits_invoice_for_825x1065():
+    res = _cell_825x1065(stock=_INVOICE_STOCK)
+    assert res["assumptions"]["stock_replanned"] is True
+    p90 = next(p for p in res["bom"]["panels"] if p["size"].startswith("90"))
+    assert p90["quantity"] <= 58
+    chk = calculator.reconcile_stock(res, _INVOICE_STOCK)
+    assert chk["fits_in_stock"] is True
+
+
+def test_stock_replan_fits_invoice_for_10x8():
+    poly = [(0, 0), (1000, 0), (1000, 800), (0, 800)]
+    walls, winding = calculator.polygon_to_cell(poly, height=150, thickness=25)
+    res = calculator.calculate_cell(
+        walls, system="BAUTEKK", wall_thickness_cm=25, inner_corner_leg_cm=20,
+        available_widths=(90, 75, 70, 60, 50, 45, 25),
+        polygon_points=poly, polygon_winding=winding, stock=_INVOICE_STOCK,
+    )
+    assert res["assumptions"]["stock_replanned"] is True
+    p90 = next(p for p in res["bom"]["panels"] if p["size"].startswith("90"))
+    assert p90["quantity"] <= 58
+    assert calculator.reconcile_stock(res, _INVOICE_STOCK)["fits_in_stock"] is True

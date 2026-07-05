@@ -108,6 +108,156 @@ def cover_width(target_cm: int, widths: tuple[int, ...]) -> tuple[dict[int, int]
     return {}, target
 
 
+def _exact_cover_min_pieces(
+    remaining: int,
+    sizes: tuple[int, ...],
+    caps: dict[int, int],
+) -> dict[int, int] | None:
+    """Minimum panel count summing exactly to ``remaining`` with per-width caps."""
+    if remaining == 0:
+        return {}
+    sizes = tuple(sorted(sizes, reverse=True))
+    best: dict[int, int] | None = None
+    best_n = math.inf
+
+    def rec(rem: int, idx: int, cur: dict[int, int], used: int) -> None:
+        nonlocal best, best_n
+        if rem == 0:
+            if used < best_n:
+                best_n = used
+                best = dict(cur)
+            return
+        if rem < 0 or idx >= len(sizes) or used >= best_n:
+            return
+        s = sizes[idx]
+        max_k = min(caps.get(s, rem // s + 1), rem // s)
+        for k in range(max_k, -1, -1):
+            if k:
+                cur[s] = k
+            rec(rem - k * s, idx + 1, cur, used + k)
+            if k:
+                del cur[s]
+
+    rec(remaining, 0, {}, 0)
+    return best
+
+
+def cover_width_with_caps(
+    target_cm: int,
+    widths: tuple[int, ...],
+    caps: dict[int, int],
+) -> tuple[dict[int, int], int] | None:
+    """Like ``cover_width`` but with per-width count limits in one face run."""
+    target = int(round(target_cm))
+    if target <= 0:
+        return {}, 0
+    smallest = min(widths)
+    for timber in range(0, smallest):
+        remaining = target - timber
+        if remaining < 0:
+            break
+        combo = _exact_cover_min_pieces(remaining, widths, caps)
+        if combo is not None:
+            return combo, timber
+    return None
+
+
+def _cell_flat_run(w: CellWall, inner_leg: float, t: float) -> float:
+    def reduction(is_corner: bool) -> float:
+        return (inner_leg + t / 2) if is_corner else 0.0
+
+    return w.axis_length - reduction(w.start_is_corner) - reduction(w.end_is_corner)
+
+
+def _group_walls_by_flat_run(walls: list[CellWall], inner_leg: float, t: float) -> dict[float, int]:
+    groups: dict[float, int] = {}
+    for w in walls:
+        key = round(_cell_flat_run(w, inner_leg, t), 1)
+        groups[key] = groups.get(key, 0) + 1
+    return groups
+
+
+def _panel_stock_remaining(
+    stock: dict[str, int], filler_w: int, filler_is_panel: bool, filler_qty: int,
+) -> dict[int, int]:
+    rem = {int(k): int(v) for k, v in stock.items() if str(k).isdigit()}
+    if filler_is_panel and filler_qty:
+        rem[filler_w] = rem.get(filler_w, 0) - filler_qty
+    return rem
+
+
+def _flat_run_demand(
+    plans: dict[float, tuple[dict[int, int], int]],
+    groups: dict[float, int],
+    *,
+    faces: int,
+    courses: int,
+) -> dict[int, int]:
+    demand: dict[int, int] = {}
+    for fr, nw in groups.items():
+        cols, _ = plans[fr]
+        for w, c in cols.items():
+            demand[w] = demand.get(w, 0) + c * nw * faces * courses
+    return demand
+
+
+def plan_flat_runs_with_stock(
+    groups: dict[float, int],
+    widths: tuple[int, ...],
+    stock_panels: dict[int, int],
+    *,
+    faces: int = 2,
+    courses: int = 1,
+) -> tuple[dict[float, tuple[dict[int, int], int]], bool]:
+    """Choose flat panel runs per wall group that fit hard stock limits.
+
+    Returns (plans, replanned) where replanned is True when caps were applied.
+    """
+    uncapped = {w: 9999 for w in widths}
+    plans: dict[float, tuple[dict[int, int], int]] = {
+        fr: cover_width(int(fr), widths) for fr in groups
+    }
+    replanned = False
+
+    for _ in range(1000):
+        demand = _flat_run_demand(plans, groups, faces=faces, courses=courses)
+        shortfall = {
+            w: demand[w] - stock_panels.get(w, 0)
+            for w in demand
+            if demand[w] > stock_panels.get(w, 0)
+        }
+        if not shortfall:
+            return plans, replanned
+
+        w_short = max(shortfall, key=shortfall.get)
+        over = shortfall[w_short]
+        fixed = False
+        for fr in sorted(groups, key=lambda f: -plans[f][0].get(w_short, 0)):
+            used = plans[fr][0].get(w_short, 0)
+            if used <= 0:
+                continue
+            nw = groups[fr]
+            drop = min(used, math.ceil(over / (nw * faces * courses)))
+            if drop <= 0:
+                continue
+            caps = dict(uncapped)
+            caps[w_short] = used - drop
+            new = cover_width_with_caps(int(fr), widths, caps)
+            if new is None and caps[w_short] > 0:
+                caps[w_short] = 0
+                new = cover_width_with_caps(int(fr), widths, caps)
+            if new is None:
+                continue
+            plans[fr] = new
+            replanned = True
+            fixed = True
+            break
+        if not fixed:
+            return plans, replanned
+
+    return plans, replanned
+
+
 def cover_height(target_cm: int, heights: tuple[int, ...]) -> tuple[dict[int, int], int]:
     """Cover a height by STACKING panels to reach at least the wall height.
 
@@ -704,6 +854,7 @@ def calculate_cell(
     polygon_points: list[tuple[float, float]] | None = None,
     polygon_winding: str | None = None,
     available_widths: tuple[int, ...] | None = None,
+    stock: dict[str, int] | None = None,
 ) -> dict:
     """Full BOM + layout DRAFT for a CLOSED cell with ALIGNED joints.
 
@@ -756,6 +907,26 @@ def calculate_cell(
         f"każdy narożnik = zewn. „0” + 2×{filler_w} wypełniacz + wewn. {int(inner_leg)}×{int(inner_leg)}."
     )
 
+    courses0, _ = cover_height(int(round(walls[0].height)), sys.panel_heights)
+    course_layers = sum(courses0.values())
+    flat_run_plans: dict[float, tuple[dict[int, int], int]] | None = None
+    stock_replanned = False
+    if stock:
+        filler_qty = sum(
+            sum(1 for c, _ in ((w.start_is_corner, w.start_kind), (w.end_is_corner, w.end_kind)) if c)
+            for w in walls
+        ) * course_layers
+        groups = _group_walls_by_flat_run(walls, inner_leg, t)
+        stock_rem = _panel_stock_remaining(stock, filler_w, filler_is_panel, filler_qty)
+        flat_run_plans, stock_replanned = plan_flat_runs_with_stock(
+            groups, widths, stock_rem, faces=2, courses=course_layers,
+        )
+        if stock_replanned:
+            warnings.append(
+                "Układ płyt dostosowany do stanu magazynowego — brakujące szerokości "
+                "zastąpiono innymi płytami z magazynu (wspólny bieg na obu stronach)."
+            )
+
     panel_totals: dict[str, int] = {}
     filler_by_height: dict[int, int] = {}
     outer_by_height: dict[int, int] = {}
@@ -772,17 +943,16 @@ def calculate_cell(
     filler_total = 0
     seg_out: list[dict] = []
 
-    def reduction(is_corner: bool) -> float:
-        return (inner_leg + t / 2) if is_corner else 0.0
-
     for w in walls:
-        _validate_dimension(w.height, "height", w.label)
         courses, overshoot = cover_height(int(round(w.height)), sys.panel_heights)
         course_height_sum = sum(h * nh for h, nh in courses.items())
 
-        flat_run = w.axis_length - reduction(w.start_is_corner) - reduction(w.end_is_corner)
+        flat_run = _cell_flat_run(w, inner_leg, t)
         _validate_dimension(flat_run, "flat run (axis minus corners)", w.label)
-        cols, timber = cover_width(int(round(flat_run)), widths)
+        if flat_run_plans is not None:
+            cols, timber = flat_run_plans[round(flat_run, 1)]
+        else:
+            cols, timber = cover_width(int(round(flat_run)), widths)
         flat_seq = [cw for cw in sorted(cols, reverse=True) for _ in range(cols[cw])]
         flat_cols = sum(cols.values())
         flat_width_sum = sum(cw * ncw for cw, ncw in cols.items())
@@ -957,6 +1127,7 @@ def calculate_cell(
             "width_policy": "minimalizuj resztkę deski, potem liczbę płyt",
             "height_policy": "układaj płyty w pionie do wysokości ściany; nadwyżkę górną nie tnij",
             "hardware_coeffs": "przybliżone; skalibruj wg DTR",
+            "stock_replanned": stock_replanned if stock else None,
         },
         "input_echo": {
             "geometry_source": "closed_cell",
