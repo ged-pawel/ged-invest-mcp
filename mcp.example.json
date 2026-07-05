@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "ged-invest": {
+      "command": "/Users/pawel/Projects/bud-ged-mcp/.venv/bin/python",
+      "args": ["-m", "ged_invest_mcp.server"]
+    }
+  }
+}

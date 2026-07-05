@@ -1,0 +1,13 @@
+# Render.com — connect repo → New Blueprint → deploy.
+# Demo/tests are excluded by .dockerignore; image ships src/ + pyproject only.
+services:
+  - type: web
+    name: ged-invest-mcp
+    runtime: docker
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: MCP_TRANSPORT
+        value: http
+      - key: HOST
+        value: 0.0.0.0
